@@ -42,7 +42,9 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - uses: astral-sh/setup-uv@v10.3.2
       - name: Install
-        run: uv pip install --system -e ".[ml,experiment,serving,agents,dev]"
+        # The agent/RAG tests use the deterministic fallback; installing the
+        # optional LangGraph/LangChain extras is unnecessary in CI.
+        run: uv pip install --system -e ".[ml,experiment,serving,dev]"
       - name: Pytest
         run: pytest --cov=src --cov-report=xml
       - name: Upload coverage
