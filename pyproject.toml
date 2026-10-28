@@ -24,7 +24,7 @@ dependencies = [
     "duckdb>=1.5.5",
     "pyyaml>=6.0.3",
     "pydantic>=2.13.4",
-    "pydantic-settings>=2.15.0",
+    "pydantic-settings>=2.16.1",
     "python-dotenv>=1.2.3",
 ]
 
