@@ -33,12 +33,15 @@ ml = [
     "scikit-learn>=1.9.0",
     "lightgbm>=4.7.0",
     "xgboost>=3.4.1",
-    "catboost>=1.2.10",
     "imbalanced-learn>=0.14.0",
     "shap>=0.52.0",
     "matplotlib>=3.11.1",
     "seaborn>=0.13.2",
 ]
+# CatBoost is optional: it has no Python 3.15 wheel yet, and the ensemble
+# falls back to HistGradientBoostingClassifier. Install this extra on Python
+# versions where CatBoost is available.
+ml-catboost = ["catboost>=1.2.10"]
 experiment = [
     "scipy>=1.18.0",
     "statsmodels>=0.14.6",
