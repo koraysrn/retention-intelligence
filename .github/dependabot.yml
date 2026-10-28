@@ -1,3 +1,4 @@
+# Dependabot policy: grouped minor/patch updates, majors reviewed manually.
 version: 2
 
 # Keep dependency noise low:
