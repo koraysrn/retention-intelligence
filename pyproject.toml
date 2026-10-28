@@ -35,7 +35,7 @@ ml = [
     "xgboost>=3.4.1",
     "imbalanced-learn>=0.14.0",
     "shap>=0.52.0",
-    "matplotlib>=3.11.1",
+    "matplotlib>=3.11.2",
     "seaborn>=0.13.2",
 ]
 # CatBoost is optional: it has no Python 3.15 wheel yet, and the ensemble
