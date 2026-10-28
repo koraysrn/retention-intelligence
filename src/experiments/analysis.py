@@ -1,9 +1,9 @@
 """Statistical analysis for A/B tests.
 
-- Two-proportion z-test for ratio metrics (churn rate).
-- CUPED-adjusted Welch t-test for continuous metrics (net revenue).
-- Alpha-spending framework for sequential testing (O'Brien-Fleming).
-- End-to-end analysis: ``analyze_experiment`` + synthetic experiment simulation.
+- Two-proportion z-test with a sign-consistent CI and lift CI.
+- CUPED-adjusted Welch t-test for continuous metrics.
+- O'Brien-Fleming / Lan-DeMets sequential testing.
+- Guardrails, multiplicity correction and a practical-significance decision rule.
 """
 
 from __future__ import annotations
@@ -35,6 +35,8 @@ class ProportionsTestResult:
     ci_low: float
     ci_high: float
     significant: bool
+    lift_ci_low: float = 0.0
+    lift_ci_high: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -47,7 +49,8 @@ def proportions_z_test(
 ) -> ProportionsTestResult:
     """Two-independent-proportion z-test (churn-rate comparison).
 
-    ``lift`` = (p2 − p1) / p1; a negative value indicates improvement for churn.
+    ``z`` and the CI use the same orientation (treatment − control). A negative
+    lift means the treatment reduced churn.
     """
     n1, n2 = len(control), len(treatment)
     if n1 == 0 or n2 == 0:
@@ -58,12 +61,15 @@ def proportions_z_test(
     p_pool = (x1 + x2) / (n1 + n2)
 
     se = math.sqrt(p_pool * (1 - p_pool) * (1 / n1 + 1 / n2))
-    z = (p1 - p2) / se if se > 0 else 0.0
+    diff = p2 - p1  # treatment - control, same sign as the CI
+    z = diff / se if se > 0 else 0.0
     p_value = float(2 * (1 - stats.norm.cdf(abs(z))))
 
     se_diff = math.sqrt(p1 * (1 - p1) / n1 + p2 * (1 - p2) / n2)
     margin = stats.norm.ppf(1 - alpha / 2) * se_diff
-    lift = (p2 - p1) / p1 if p1 > 0 else float("inf")
+    lift = diff / p1 if p1 > 0 else float("inf")
+    lift_low = (diff - margin) / p1 if p1 > 0 else float("-inf")
+    lift_high = (diff + margin) / p1 if p1 > 0 else float("inf")
 
     return ProportionsTestResult(
         p1=float(p1),
@@ -71,9 +77,11 @@ def proportions_z_test(
         lift=float(lift),
         z_stat=float(z),
         p_value=p_value,
-        ci_low=float((p2 - p1) - margin),
-        ci_high=float((p2 - p1) + margin),
+        ci_low=float(diff - margin),
+        ci_high=float(diff + margin),
         significant=bool(p_value < alpha),
+        lift_ci_low=float(lift_low),
+        lift_ci_high=float(lift_high),
     )
 
 
@@ -117,13 +125,34 @@ def cuped_t_test(
 
 
 def obrien_fleming_boundary(information_fraction: float, alpha: float = 0.05) -> float:
-    """O'Brien-Fleming interim-analysis boundary (z-statistic threshold).
-
-    Controls the type-I error inflation caused by peeking in sequential testing.
-    """
+    """O'Brien-Fleming interim-analysis boundary (z-statistic threshold)."""
     if not 0 < information_fraction <= 1:
         raise ValueError("information_fraction must be in the 0-1 range")
     return float(stats.norm.ppf(1 - alpha / 2) / math.sqrt(information_fraction))
+
+
+def lan_demets_alpha_spent(information_fraction: float, alpha: float = 0.05) -> float:
+    """Approximate Lan-DeMets alpha spending corresponding to OBF boundaries."""
+    if not 0 < information_fraction <= 1:
+        raise ValueError("information_fraction must be in the 0-1 range")
+    boundary = obrien_fleming_boundary(information_fraction, alpha)
+    return float(2 * (1 - stats.norm.cdf(boundary)))
+
+
+def multiple_metric_correction(p_values: dict[str, float], method: str = "bonferroni") -> dict:
+    """Adjust p-values for multiple primary/secondary metrics."""
+    if method == "bonferroni":
+        adjusted = {k: min(1.0, v * len(p_values)) for k, v in p_values.items()}
+    elif method == "holm":
+        ordered = sorted(p_values.items(), key=lambda item: item[1])
+        adjusted = {}
+        running = 0.0
+        for rank, (key, value) in enumerate(ordered):
+            running = max(running, min(1.0, value * (len(ordered) - rank)))
+            adjusted[key] = running
+    else:
+        raise ValueError(f"Unknown correction method: {method}")
+    return adjusted
 
 
 def simulate_outcomes(
@@ -134,12 +163,7 @@ def simulate_outcomes(
     avg_revenue: float = 300.0,
     incentive_cost: float = 50.0,
 ) -> pd.DataFrame:
-    """Generate synthetic experiment outcomes with a deterministic seed.
-
-    Churn decreases relatively by ``treatment_effect`` in the treatment group;
-    non-churned customers generate revenue. Pre-experiment revenue is produced
-    as the CUPED covariate.
-    """
+    """Generate synthetic experiment outcomes with a deterministic seed."""
     if not 0 <= treatment_effect <= 1:
         raise ValueError("treatment_effect must be in the 0-1 range")
 
@@ -166,6 +190,8 @@ def simulate_outcomes(
             "revenue": post_revenue,
             "pre_revenue": pre_revenue,
             "discount_cost": discount_cost,
+            "unsubscribe": (rng.random(n) < np.where(is_treatment, 0.006, 0.005)).astype(int),
+            "complaint": (rng.random(n) < np.where(is_treatment, 0.004, 0.003)).astype(int),
         }
     )
 
@@ -173,12 +199,12 @@ def simulate_outcomes(
 def analyze_experiment(
     data: pd.DataFrame,
     alpha: float = 0.05,
+    mde_absolute: float = 0.0,
+    revenue_non_inferiority_margin: float = 0.0,
+    information_fraction: float = 1.0,
+    apply_multiplicity: bool = True,
 ) -> dict:
-    """Analyze experiment data end-to-end and produce a decision report.
-
-    Expected columns: ``assignment`` ('control'/'treatment'), ``churn`` (0/1).
-    Optional: ``revenue``, ``pre_revenue``, ``discount_cost``.
-    """
+    """Analyze experiment data end-to-end and produce a decision report."""
     required = {"assignment", "churn"}
     missing = required - set(data.columns)
     if missing:
@@ -198,7 +224,11 @@ def analyze_experiment(
         "n_control": int(control_mask.sum()),
         "n_treatment": int(treatment_mask.sum()),
         "churn_test": churn_test.to_dict(),
+        "information_fraction": float(information_fraction),
+        "alpha": float(alpha),
     }
+
+    p_values = {"churn": churn_test.p_value}
 
     net_revenue_test = None
     if "revenue" in data.columns:
@@ -211,33 +241,89 @@ def analyze_experiment(
 
         if "pre_revenue" in data.columns:
             adjusted = apply_cuped(net_revenue, data["pre_revenue"], assignment)
-            adjusted = adjusted.fillna(net_revenue)
+            # No mixing of adjusted/unadjusted rows: drop any unusable rows.
+            valid = adjusted.notna()
+            adjusted = adjusted[valid]
+            analysis_assignment = assignment[valid]
+            cuped_used = True
         else:
             adjusted = net_revenue
+            analysis_assignment = assignment
+            cuped_used = False
 
-        net_revenue_test = cuped_t_test(
-            adjusted[control_mask],
-            adjusted[treatment_mask],
-            alpha,
-        )
+        adjusted_control = adjusted[analysis_assignment == "control"]
+        adjusted_treatment = adjusted[analysis_assignment == "treatment"]
+        net_revenue_test = cuped_t_test(adjusted_control, adjusted_treatment, alpha)
         mean_control = float(net_revenue[control_mask].mean())
         mean_treatment = float(net_revenue[treatment_mask].mean())
         net_revenue_test["lift"] = (
             (mean_treatment - mean_control) / mean_control if mean_control > 0 else float("inf")
         )
+        net_revenue_test["cuped_used"] = cuped_used
+        net_revenue_test["cuped_n"] = int(len(adjusted))
+        net_revenue_test["non_inferiority_margin"] = float(revenue_non_inferiority_margin)
+        net_revenue_test["non_inferior"] = bool(
+            net_revenue_test["ci_low"] > -float(revenue_non_inferiority_margin)
+        )
         report["net_revenue_test"] = net_revenue_test
+        p_values["net_revenue"] = float(net_revenue_test["p_value"])
 
-    # Decision rule (see docs/ab_test_design.md)
-    churn_wins = churn_test.significant and churn_test.p2 < churn_test.p1
-    net_erodes = bool(net_revenue_test and net_revenue_test["mean_diff"] < 0)
+    # Guardrails (only when the columns exist).
+    guardrails: dict[str, dict] = {}
+    for col in ("unsubscribe", "complaint"):
+        if col in data.columns:
+            c = data.loc[control_mask, col]
+            t = data.loc[treatment_mask, col]
+            test = proportions_z_test(c, t, alpha)
+            guardrails[col] = {
+                "control_rate": test.p1,
+                "treatment_rate": test.p2,
+                "p_value": test.p_value,
+                "passed": not (test.significant and test.p2 > test.p1),
+            }
+    guardrails_passed = all(g["passed"] for g in guardrails.values())
+    report["guardrails"] = guardrails
+    report["guardrails_passed"] = guardrails_passed
 
-    if churn_wins and not net_erodes:
+    if apply_multiplicity and len(p_values) > 1:
+        report["adjusted_p_values"] = multiple_metric_correction(p_values, method="holm")
+        report["multiplicity_method"] = "holm"
+
+    # Sequential test: only declare significance if the observed z exceeds the
+    # O'Brien-Fleming boundary for the current information fraction.
+    boundary = obrien_fleming_boundary(information_fraction, alpha)
+    report["sequential"] = {
+        "information_fraction": float(information_fraction),
+        "obrien_fleming_z": boundary,
+        "observed_abs_z": abs(churn_test.z_stat),
+        "alpha_spent": lan_demets_alpha_spent(information_fraction, alpha),
+        "can_stop": bool(abs(churn_test.z_stat) >= boundary),
+    }
+
+    # Decision rule with practical significance + non-inferiority.
+    churn_sig = churn_test.significant
+    churn_direction = churn_test.p2 < churn_test.p1
+    practical = (churn_test.p1 - churn_test.p2) >= float(mde_absolute)
+    churn_wins = churn_sig and churn_direction and practical
+    net_non_inferior = True if net_revenue_test is None else bool(net_revenue_test["non_inferior"])
+    net_erodes = not net_non_inferior
+
+    if churn_wins and net_non_inferior and guardrails_passed:
         decision = "LAUNCH"
-    elif churn_wins and net_erodes:
+    elif churn_sig and churn_direction and net_erodes:
         decision = "OPTIMIZE"
     else:
         decision = "HOLD"
     report["decision"] = decision
+    report["decision_inputs"] = {
+        "churn_significant": churn_sig,
+        "churn_direction_improved": churn_direction,
+        "practical_significance": practical,
+        "net_non_inferior": net_non_inferior,
+        "guardrails_passed": guardrails_passed,
+        "mde_absolute": float(mde_absolute),
+    }
+    report["simulated"] = True
     return report
 
 

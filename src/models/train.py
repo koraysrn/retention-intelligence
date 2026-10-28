@@ -1,41 +1,29 @@
-"""Churn model training pipeline (Phase 2).
+"""Model factory, preprocessing helpers and the single training entry point.
 
-Pipeline:
-1. Load the training data and sort it chronologically.
-2. Split features/target (leakage prevention).
-3. Select the model with time-based walk-forward CV (PR-AUC first).
-4. Train the final model; optimize the threshold via the profit curve.
-5. Compute final metrics on the holdout test set.
-6. Log to MLflow (falls back to local logging when no server is available).
-7. Produce feature importances with SHAP.
+The project has **one** training protocol: ``scripts.train_ensemble``. This
+module exposes reusable model/preprocessing utilities and delegates ``main()``
+to the ensemble trainer so there is no second, divergent training path.
+
+Model availability:
+- LightGBM and XGBoost are used when installed.
+- CatBoost is used when installed; otherwise it falls back to scikit-learn's
+  ``HistGradientBoostingClassifier`` (same 3-model ensemble shape, no crash).
+- Logistic Regression is the interpretable baseline.
 """
 
 from __future__ import annotations
 
-import argparse
-import json
 import logging
-from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 
-from src.config import PROJECT_ROOT, load_yaml, settings
-from src.models.evaluate import (
-    evaluate_binary,
-    find_optimal_threshold,
-    full_metrics,
-    summarize_cv,
-)
-from src.models.prepare import (
-    build_preprocessor,
-    categorical_features,
-    numeric_features,
-    split_features_target,
-)
+from src.config import settings
+from src.models.prepare import build_preprocessor
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +57,27 @@ DEFAULT_PARAMS: dict[str, dict] = {
         "verbose": 0,
         "allow_writing_files": False,
     },
+    "hist": {
+        "learning_rate": 0.06,
+        "max_iter": 300,
+        "max_leaf_nodes": 31,
+        "l2_regularization": 1.0,
+        "random_state": 42,
+    },
 }
+
+
+def _has_module(name: str) -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec(name) is not None
+
+
+def available_model_types() -> list[str]:
+    """Return the 3-model ensemble members available in this environment."""
+    models = ["lightgbm", "xgboost"]
+    models.append("catboost" if _has_module("catboost") else "hist")
+    return models
 
 
 def make_model(model_type: str, params: dict | None = None):
@@ -87,22 +95,15 @@ def make_model(model_type: str, params: dict | None = None):
 
         return xgb.XGBClassifier(**p)
     if model_type == "catboost":
-        import catboost as cat
+        if _has_module("catboost"):
+            import catboost as cat
 
-        return cat.CatBoostClassifier(**p)
+            return cat.CatBoostClassifier(**p)
+        logger.warning("catboost is not installed on this Python; using HistGradientBoosting")
+        return HistGradientBoostingClassifier(**DEFAULT_PARAMS["hist"])
+    if model_type == "hist":
+        return HistGradientBoostingClassifier(**p)
     raise ValueError(f"Unknown model type: {model_type}")
-
-
-def load_training_data(path: Path | str | None = None) -> pd.DataFrame:
-    """Load the Phase 1 training set."""
-    path = Path(path or settings.data_processed / "training_set.parquet")
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Training set not found: {path}. Run `python -m scripts.build_features` first."
-        )
-    df = pd.read_parquet(path)
-    logger.info("Training data loaded: %d rows, %d columns", len(df), df.shape[1])
-    return df
 
 
 def build_pipeline(
@@ -117,6 +118,18 @@ def build_pipeline(
     return Pipeline([("preprocessor", preprocessor), ("classifier", model)])
 
 
+def load_training_data(path: Path | str | None = None) -> pd.DataFrame:
+    """Load the Phase 1 training set."""
+    path = Path(path or settings.data_processed / "training_set.parquet")
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Training set not found: {path}. Run `python -m scripts.build_features` first."
+        )
+    df = pd.read_parquet(path)
+    logger.info("Training data loaded: %d rows, %d columns", len(df), df.shape[1])
+    return df
+
+
 def walk_forward_cv(
     x: pd.DataFrame,
     y: pd.Series,
@@ -126,16 +139,21 @@ def walk_forward_cv(
     numeric_cols: list[str] | None = None,
     categorical_cols: list[str] | None = None,
 ) -> list[dict]:
-    """Time-based walk-forward cross-validation.
+    """Stratified K-Fold cross-validation (retained name for compatibility).
 
-    The data is expected to be chronologically ordered (sorted inside main()).
+    This data is a **customer-level snapshot**, so a temporal walk-forward split
+    is not meaningful and would create label shift. The single evaluation
+    protocol uses stratified folds; the function name is kept to avoid breaking
+    external imports.
     """
-    from sklearn.model_selection import TimeSeriesSplit
+    from sklearn.model_selection import StratifiedKFold
 
-    tscv = TimeSeriesSplit(n_splits=n_splits)
+    from src.models.evaluate import evaluate_binary, full_metrics
+
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
     results: list[dict] = []
 
-    for fold, (train_idx, val_idx) in enumerate(tscv.split(x)):
+    for fold, (train_idx, val_idx) in enumerate(skf.split(x, y)):
         pipe = build_pipeline(model_type, params, numeric_cols, categorical_cols)
         pipe.fit(x.iloc[train_idx], y.iloc[train_idx])
         proba = pipe.predict_proba(x.iloc[val_idx])[:, 1]
@@ -159,7 +177,6 @@ def _shap_explainer(
     if model_type == "logistic":
         return shap.LinearExplainer(model, background, feature_names=feature_names)
 
-    # Tree-based models: use the raw booster instead of the wrappers
     if model_type == "lightgbm" and hasattr(model, "booster_"):
         model = model.booster_
     elif model_type == "xgboost" and hasattr(model, "get_booster"):
@@ -182,8 +199,6 @@ def compute_shap_importance(
 
     x_t = pre.transform(x)
     feature_names = list(pre.get_feature_names_out())
-
-    # Keep the background small: sufficient for the expected-value computation
     background = x_t[: min(100, len(x_t))]
     explainer = _shap_explainer(clf, background, feature_names, model_type)
     shap_values = explainer.shap_values(x_t)
@@ -198,162 +213,11 @@ def compute_shap_importance(
     return importance.sort_values("mean_abs_shap", ascending=False).reset_index(drop=True)
 
 
-def save_local_artifacts(
-    out_dir: Path,
-    pipeline: Pipeline,
-    metrics_payload: dict,
-    shap_df: pd.DataFrame,
-) -> None:
-    """Persist local outputs outside MLflow (always runs)."""
-    from joblib import dump
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    dump(pipeline, out_dir / "pipeline.joblib")
-    with (out_dir / "metrics.json").open("w", encoding="utf-8") as f:
-        json.dump(metrics_payload, f, ensure_ascii=False, indent=2)
-    shap_df.to_csv(out_dir / "shap_importance.csv", index=False)
-    logger.info("Local artifacts saved: %s", out_dir)
-
-
-def log_to_mlflow(
-    model_type: str,
-    params: dict,
-    cv_summary: dict,
-    test_metrics: dict,
-    threshold: float,
-    shap_df: pd.DataFrame,
-    pipeline: Pipeline,
-    x_train: pd.DataFrame,
-) -> None:
-    """Log the model to MLflow; warn and continue when no server is available."""
-    import mlflow
-
-    try:
-        mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
-        mlflow.set_experiment(MODEL_NAME)
-        run_name = f"{model_type}_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
-        with mlflow.start_run(run_name=run_name):
-            mlflow.log_params(params or {})
-            for key, value in cv_summary.items():
-                mlflow.log_metric(f"cv_{key}_mean", value["mean"])
-                mlflow.log_metric(f"cv_{key}_std", value["std"])
-            for key, value in test_metrics.items():
-                mlflow.log_metric(f"test_{key}", value)
-            mlflow.log_metric("optimal_threshold", threshold)
-
-            shap_path = Path("shap_importance.csv")
-            shap_df.to_csv(shap_path, index=False)
-            mlflow.log_artifact(str(shap_path))
-
-            mlflow.sklearn.log_model(
-                pipeline,
-                "model",
-                input_example=x_train.head(5),
-            )
-        logger.info("MLflow logging completed: %s", run_name)
-    except Exception as exc:  # noqa: BLE001 — MLflow is optional; training must continue
-        logger.warning("MLflow logging skipped (server unreachable): %s", exc)
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Churn model training")
-    parser.add_argument(
-        "--data",
-        type=Path,
-        default=settings.data_processed / "training_set.parquet",
-    )
-    parser.add_argument(
-        "--model-type",
-        default="lightgbm",
-        choices=["lightgbm", "xgboost", "catboost", "logistic"],
-    )
-    parser.add_argument("--n-splits", type=int, default=5)
-    parser.add_argument("--target", default="churn")
-    parser.add_argument("--ltv", type=float, default=500.0)
-    parser.add_argument("--incentive-cost", type=float, default=50.0)
-    parser.add_argument("--no-mlflow", action="store_true")
-    parser.add_argument("--out", type=Path, default=settings.artifacts_dir / "model")
-    args = parser.parse_args()
+    """Single training entry point: delegate to the calibrated ensemble trainer."""
+    from scripts.train_ensemble import main as ensemble_main
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-
-    # Hyperparameters from YAML (if present) become the defaults before the CLI
-    params: dict = {}
-    params_file = PROJECT_ROOT / "configs" / "model_params.yaml"
-    if params_file.exists():
-        loaded = load_yaml(params_file)
-        params = loaded.get(args.model_type, {})
-
-    df = load_training_data(args.data)
-    if "last_order_date" in df.columns:
-        df = df.sort_values("last_order_date").reset_index(drop=True)
-
-    x, y = split_features_target(df, target_col=args.target)
-    num_cols = numeric_features(x)
-    cat_cols = categorical_features(x)
-    logger.info("Numeric features: %s", num_cols)
-    logger.info("Categorical features: %s", cat_cols)
-
-    # 70 / 15 / 15 chronological split
-    n = len(df)
-    tr_end = int(n * 0.70)
-    val_end = int(n * 0.85)
-    x_train, y_train = x.iloc[:tr_end], y.iloc[:tr_end]
-    x_val, y_val = x.iloc[tr_end:val_end], y.iloc[tr_end:val_end]
-    x_test, y_test = x.iloc[val_end:], y.iloc[val_end:]
-
-    cv_metrics = walk_forward_cv(
-        x_train, y_train, args.model_type, args.n_splits, params, num_cols, cat_cols
-    )
-    cv_summary = summarize_cv(cv_metrics)
-    logger.info("CV summary (walk-forward):\n%s", json.dumps(cv_summary, indent=2))
-
-    pipeline = build_pipeline(args.model_type, params, num_cols, cat_cols)
-    pipeline.fit(x_train, y_train)
-
-    val_proba = pd.Series(pipeline.predict_proba(x_val)[:, 1], index=y_val.index)
-    threshold = find_optimal_threshold(y_val, val_proba, args.ltv, args.incentive_cost)
-    logger.info("Optimal threshold (profit curve): %.4f", threshold)
-
-    test_proba = pd.Series(pipeline.predict_proba(x_test)[:, 1], index=y_test.index)
-    test_metrics = evaluate_binary(y_test, test_proba, threshold)
-    test_full = full_metrics(y_test, test_proba)
-    logger.info(
-        "Holdout test metrics (threshold=%.4f):\n%s",
-        threshold,
-        json.dumps(test_metrics, indent=2),
-    )
-    logger.info("Holdout full metrics:\n%s", json.dumps(test_full, indent=2))
-
-    shap_df = compute_shap_importance(pipeline, x_train, args.model_type)
-    logger.info("Top 5 features:\n%s", shap_df.head(5).to_string(index=False))
-
-    metrics_payload = {
-        "model_type": args.model_type,
-        "cv_summary": cv_summary,
-        "threshold": threshold,
-        "ltv": args.ltv,
-        "incentive_cost": args.incentive_cost,
-        "test_metrics": test_metrics,
-        "test_full": test_full,
-        "num_features": len(num_cols) + len(cat_cols),
-        "train_size": len(x_train),
-        "val_size": len(x_val),
-        "test_size": len(x_test),
-    }
-    save_local_artifacts(args.out, pipeline, metrics_payload, shap_df)
-
-    if not args.no_mlflow:
-        log_to_mlflow(
-            args.model_type,
-            params,
-            cv_summary,
-            test_metrics,
-            threshold,
-            shap_df,
-            pipeline,
-            x_train,
-        )
+    ensemble_main()
 
 
 if __name__ == "__main__":

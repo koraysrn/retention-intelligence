@@ -1,101 +1,107 @@
 # A/B Test Design
 
-An experiment design that measures whether a personalized offer campaign
-applied to customers at high churn risk reduces the churn rate and its impact on
-revenue.
+Measures whether a re-engagement campaign changes the **90-day churn rate**
+defined in [`docs/churn_definition.md`](churn_definition.md), and whether net
+revenue is non-inferior after incentive cost.
 
 ## 1. Hypotheses
 
 | # | Hypothesis |
 |---|---|
-| H0 (primary) | The campaign does not change the 90-day churn rate relative to the control group |
-| H1 (primary) | The campaign reduces the 90-day churn rate statistically significantly |
-| H0 (secondary) | The campaign does not change net revenue (revenue − discount cost) |
-| H1 (secondary) | The campaign increases net revenue |
+| H0 (primary) | The campaign does not change the 90-day churn rate |
+| H1 (primary) | The campaign reduces the 90-day churn rate |
+| H0 (secondary) | Net revenue is inferior beyond the non-inferiority margin |
+| H1 (secondary) | Net revenue is non-inferior (or better) |
 
-## 2. Experiment Parameters
+## 2. Parameters
 
-| Parameter | Proposed value | Rationale |
-|---|---|---|
-| Baseline churn rate | Computed from data (example: 20%) | Power analysis input |
-| MDE (minimum detectable effect) | Absolute −4pp (relative −20%) | Smallest effect the business considers "meaningful" |
-| α (type-I error) | 0.05 (two-tailed) | Industry standard |
-| Power (1−β) | 0.80 | Industry standard |
-| Control / treatment ratio | 50 / 50 | Maximum statistical efficiency |
-| Randomization | Stratified (risk decile, country, gender, tenure) | Pre-experiment balance between groups |
-| Unit of analysis | Customer (customer_id) | The intervention is at customer level |
+| Parameter | Value |
+|---|---|
+| Baseline churn | `training_set.parquet → churn.mean()` (as-of label) |
+| MDE | Relative (default −20%); converted to absolute for the practical-significance check |
+| α / power | 0.05 two-sided / 0.80 |
+| Ratio | 50/50 |
+| Unit | Customer |
+| Strata | `country`, `spend_decile`, `tenure_bucket` |
+| Assignment | Stratified **block randomization** (seeded hash order within each stratum) |
 
-## 3. Sample Size
+`risk_decile` is no longer used as a stratum name. When scores exist, the model
+risk decile is reported alongside; the assignment stratum is `spend_decile`,
+which is known pre-treatment.
 
-For a two-proportion test:
+## 3. Sample size
 
-```text
-n (per group) = (Zα/2 + Zβ)² × [p1(1−p1) + p2(1−p2)] / (p1 − p2)²
-```
-
-Example calculation (`p1 = 0.20`, `p2 = 0.16`, `α = 0.05`, `power = 0.80`):
+Two-proportion formula, plus a buffer:
 
 ```text
-Zα/2 = 1.96, Zβ = 0.84
-n = (1.96 + 0.84)² × (0.16 + 0.1344) / (0.04)²
-  = 7.84 × 0.2944 / 0.0016
-  ≈ 1.443  →  ~1,450 per group, ~2,900 total
+n per group = (Zα/2 + Zβ)² × [p1(1−p1) + p2(1−p2)] / (p1 − p2)²
 ```
 
-With a 20% buffer: **~3,500 customers total**.
+`python -m scripts.run_ab_experiment` computes this from the actual baseline.
 
-MDE sensitivity:
+## 4. Assignment quality
 
-| MDE (relative) | Absolute effect | n per group (approx) |
-|---|---|---|
-| −20% | −4pp | ~1,450 |
-| −15% | −3pp | ~2,580 |
-| −10% | −2pp | ~6,030 |
+`src/experiments/assignment.py` reports:
 
-## 4. Variance Reduction: CUPED
+- **SRM:** chi-square goodness of fit against the intended ratio. `p < 0.001`
+  is flagged.
+- **SMD balance:** standardized mean difference per covariate; `|SMD| < 0.10`
+  is considered balanced.
+- **Per-stratum treatment ratio** (`strata_balance_summary`).
 
-Variance is reduced for continuous metrics such as revenue by using
-pre-experiment (pre-period) metrics:
+The report is written to `artifacts/ab_experiment_report.json → assignment`.
+
+## 5. CUPED
 
 ```text
 Y_adjusted = Y − θ × (X_pre − X̄_pre)
 ```
 
-`X_pre` is the pre-experiment value of the same metric (e.g. revenue in the
-last 30 days). CUPED reduces variance by **10–50%** depending on correlation and
-reduces the required sample size.
+- θ is estimated on the **control arm** when it has at least 10 observations
+  (otherwise pooled).
+- Missing pre-period values are filled with the control mean *before*
+  adjustment; adjusted and unadjusted rows are never mixed.
+- `variance_reduction()` reports the variance reduction.
 
-## 5. Statistical Decision Procedure
+## 6. Sequential testing
 
-```mermaid
-flowchart TB
-    D["Experiment data collected"] --> P["Primary: 90-day churn rate (z-test / chi-square)"]
-    P --> C["CUPED-adjusted revenue test (t-test)"]
-    C --> G["Guardrail: unsubscribe, support load, margin erosion"]
-    G --> DEC{"Decision"}
-    DEC -->|"churn ↓ significant AND revenue ≥ 0"| WIN["Scale the campaign"]
-    DEC -->|"churn ↓ but margin eroded"| OPT["Run a discount-tier A/B"]
-    DEC -->|"no significant difference"| LOSE["H0 not rejected — redesign"]
+The analysis reports the O'Brien-Fleming boundary for the current information
+fraction and the corresponding Lan-DeMets alpha spending. A result is only
+“stoppable” when `|z| >= boundary`; the final analysis uses
+`information_fraction = 1.0`.
+
+## 7. Decision rule
+
+```text
+churn_wins = significant AND treatment churn < control churn
+             AND (control − treatment) >= MDE_absolute
+
+net_non_inferior = CI_low(net_revenue_diff) > −non_inferiority_margin
+
+guardrails_passed = unsubscribe/complaint not significantly worse
+                    (when those columns exist)
+
+LAUNCH    if churn_wins AND net_non_inferior AND guardrails_passed
+OPTIMIZE  if churn improved significantly but net revenue erodes
+HOLD      otherwise
 ```
 
-- **Peeking control:** When multiple looks occur during the analysis,
-  O'Brien-Fleming α-spending (sequential testing) is used.
-- **Decision rule:** The campaign is rolled out only when there is **both** a
-  significant churn reduction **and** a non-negative effect on net revenue.
+`net_erodes` is **not** `mean_diff < 0`; it is a non-inferiority test against a
+configurable margin. Holm correction is applied to the reported p-values when
+multiple metrics are tested. The report explicitly includes
+`decision_inputs` so the rule is auditable.
 
-## 6. Tracked Metrics
+## 8. Tracked metrics
 
 | Type | Metric |
 |---|---|
-| Primary | 90-day churn rate |
-| Secondary | Net revenue, AOV, purchase frequency, conversion |
-| Guardrail | Unsubscribe rate, support request increase, margin erosion |
-| Health | SRM (sample ratio mismatch) check, group sizes |
+| Primary | 90-day churn |
+| Secondary | Net revenue (CUPED-adjusted), AOV, purchase frequency |
+| Guardrail | Unsubscribe, complaint, margin |
+| Health | SRM, SMD balance, per-stratum ratio |
 
-## 7. Implementation Steps
+## 9. Simulation disclaimer
 
-1. Power analysis and sample size via `python -m src.experiments.sample_size --baseline ...`.
-2. Stratified assignment + analysis + report via `python -m scripts.run_ab_experiment`.
-3. Metric logging for the duration of the experiment (immutable event log).
-4. CUPED + z-test/t-test + sequential test via `python -m src.experiments.analysis`.
-5. Result report (p-value, confidence interval, effect size, lift).
+`scripts/run_ab_experiment.py` simulates outcomes because no real campaign is
+executed. The report always contains `"simulated": true`. Do not present the
+simulated lift as a real business result.

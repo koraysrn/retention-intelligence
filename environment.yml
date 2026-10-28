@@ -1,0 +1,46 @@
+# Reproducible Python 3.15 environment for the retention-intelligence prototype.
+#
+# Python 3.15 is very new: conda-forge ships the interpreter and the core
+# scientific stack, while some ML/dbt packages do not have 3.15 builds yet.
+# `make setup` (scripts/bootstrap.sh) installs those with pip inside this
+# environment. CatBoost has no 3.15 distribution; the ensemble falls back to
+# scikit-learn HistGradientBoostingClassifier, so it still has three members.
+#
+# Create:   micromamba create -f environment.yml
+# Activate: micromamba activate retention-intelligence
+# Then:     pip install --no-deps -e .
+name: retention-intelligence
+channels:
+  - conda-forge
+dependencies:
+  - python=3.15
+  - pip>=25
+  # Core data stack
+  - numpy
+  - pandas>=2.3.3,<4
+  - pyarrow
+  - duckdb
+  - pyyaml
+  - pydantic>=2.13
+  - pydantic-settings>=2.15
+  - python-dotenv
+  # Core ML / stats / serving
+  - scikit-learn
+  - scipy
+  - statsmodels
+  - fastapi
+  - uvicorn
+  # Testing / quality
+  - pytest
+  - pytest-cov
+  - ruff
+  - mypy>=1.11,<1.15
+  - pip:
+      # Installed by `make setup`; repeated here so the YAML is self-describing.
+      - lightgbm
+      - xgboost
+      - shap
+      - imbalanced-learn
+      - types-PyYAML
+      # dbt/MLflow are installed by scripts/bootstrap.sh because dbt-core's
+      # mashumaro pin must be upgraded separately on Python 3.15.

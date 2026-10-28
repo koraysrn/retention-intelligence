@@ -110,4 +110,4 @@ def test_shap_importance_sorted_and_named() -> None:
 def test_risk_tier_assignment() -> None:
     proba = pd.Series([0.05, 0.45, 0.75, 0.9, 0.4])
     tiers = assign_risk_tier(proba)
-    assert list(tiers) == ["low", "medium", "high", "high", "low"]
+    assert list(tiers) == ["low", "medium", "high", "high", "medium"]

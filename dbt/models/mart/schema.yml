@@ -2,26 +2,41 @@ version: 2
 
 models:
   - name: customer_features
-    description: "Customer-level behavioural features (ecommerce_data.csv)"
+    description: "As-of customer feature snapshot (parity-tested against Python)"
     columns:
       - name: customer_id
         tests:
           - unique
-          - not_null
-      - name: total_spend_usd
-        tests:
           - not_null
       - name: tenure_days
         tests:
           - not_null
+      - name: has_purchase
+        tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]
+      - name: pre_asof_segment
+        tests:
+          - accepted_values:
+              values: ["zero_order", "one_time", "repeat"]
 
   - name: churn_labels
-    description: "Churn labels: churn (no repeat purchase)"
+    description: "Outcome-window churn label"
     columns:
       - name: customer_id
         tests:
           - unique
           - not_null
+          - relationships:
+              to: ref('customer_features')
+              field: customer_id
       - name: churn
         tests:
           - not_null
+          - accepted_values:
+              values: [0, 1]
+      - name: ordered_in_outcome_window
+        tests:
+          - accepted_values:
+              values: [0, 1]

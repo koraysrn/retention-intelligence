@@ -1,8 +1,18 @@
 # Agentic AI / RAG Design
 
-Instead of sending standard emails to customers at high churn risk, this is a
-multi-agent system that produces personalized content based on past purchases
-and categories and, when necessary, forwards a summary report to a sales
+> **Status: prototype, not production RAG.**
+> The shipped [`src/agents/rag.py`](../src/agents/rag.py) is a deterministic
+> keyword-overlap retriever over four documents; it does **not** use pgvector,
+> embeddings, a reranker, citations or an LLM eval set. The workflow below is
+> the design target. The prototype is kept out of the default `make pipeline`;
+> run it explicitly with `make agents`. Do not describe this repository as
+> having “production RAG”.
+
+## Design target
+
+Instead of sending standard emails to customers at high churn risk, a
+multi-agent system would produce personalized content based on past purchases
+and categories and, when necessary, forward a summary report to a sales
 representative.
 
 ## 1. Workflow

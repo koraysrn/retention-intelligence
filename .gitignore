@@ -89,7 +89,8 @@ lightning_logs/
 
 # -------------------------------- Data --------------------------------------
 # Raw/processed data never enters the repository. The directory structure is
-# preserved with .gitkeep placeholders.
+# preserved with .gitkeep placeholders. The synthetic fixtures ARE committed so
+# a clean clone can run `make data && make pipeline && make test`.
 /data/raw/*
 !/data/raw/.gitkeep
 /data/processed/*
@@ -103,6 +104,12 @@ lightning_logs/
 *.duckdb
 *.sqlite
 *.sqlite3
+!/data/fixtures/*.csv
+!/data/fixtures/*.sha256
+
+# Local environment tooling (micromamba + downloaded envs)
+.tools/
+.mamba/
 
 # ------------------------------- dbt ----------------------------------------
 dbt/target/

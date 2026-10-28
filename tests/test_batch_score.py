@@ -13,13 +13,27 @@ class _FakePipeline:
 
 
 def test_assign_risk_tier() -> None:
-    proba = pd.Series([0.05, 0.45, 0.75, 0.9, 0.4])
-    assert list(assign_risk_tier(proba)) == ["low", "medium", "high", "high", "low"]
+    proba = pd.Series([0.05, 0.45, 0.75, 0.9, 0.4, 0.70])
+    assert list(assign_risk_tier(proba)) == [
+        "low",
+        "medium",
+        "high",
+        "high",
+        "medium",
+        "high",
+    ]
 
 
 def test_score_customers_assigns_tiers() -> None:
     features = pd.DataFrame({"customer_id": ["A", "B", "C"], "x": [1.0, 2.0, 3.0]})
-    scores = score_customers(features, model=_FakePipeline())
+    config = {
+        "model_version": "test",
+        "threshold": 0.5,
+        "medium_risk": 0.4,
+        "high_risk": 0.7,
+        "feature_schema": [],
+    }
+    scores = score_customers(features, model=_FakePipeline(), serving_config=config)
     assert list(scores["customer_id"]) == ["A", "B", "C"]
     assert (scores["churn_probability"] == 0.6).all()
     assert list(scores["risk_tier"]) == ["medium", "medium", "medium"]

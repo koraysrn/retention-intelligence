@@ -1,10 +1,10 @@
-"""Retraining trigger tests."""
+"""Retraining trigger + validation gate tests."""
 
 import sys
 
 import numpy as np
 import pandas as pd
-from src.monitoring.retrain import check_and_retrain
+from src.monitoring.retrain import check_and_retrain, validate_model
 
 
 def _frames(drift: bool) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -36,3 +36,27 @@ def test_drift_triggers_retrain_with_mock_command() -> None:
     assert payload["drift_detected"] is True
     assert payload["retrained"] is True
     assert "mock train ok" in payload.get("retrain_tail", "")
+
+
+def test_validation_gate_accepts_calibrated_ensemble() -> None:
+    metrics = {
+        "ensemble": True,
+        "test_full": {"pr_auc": 0.42, "brier_score": 0.12},
+        "calibration": {"calibration_slope": 1.0},
+    }
+    gate = validate_model(metrics)
+    assert gate["passed"] is True
+
+
+def test_validation_gate_blocks_bad_model() -> None:
+    metrics = {
+        "ensemble": False,
+        "test_full": {"pr_auc": 0.05, "brier_score": 0.80},
+        "calibration": {"calibration_slope": 4.0},
+    }
+    gate = validate_model(metrics)
+    assert gate["passed"] is False
+    assert gate["checks"]["ensemble"] is False
+    assert gate["checks"]["pr_auc"] is False
+    assert gate["checks"]["brier"] is False
+    assert gate["checks"]["calibration_slope"] is False

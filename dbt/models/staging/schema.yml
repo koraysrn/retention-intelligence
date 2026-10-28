@@ -19,6 +19,15 @@ sources:
             description: "Registration date"
           - name: is_repeat_customer
             description: "Repeat purchase label (1/0)"
+      - name: orders
+        description: "Transaction-level order history used for as-of features and labels"
+        columns:
+          - name: order_id
+            description: "Order key"
+          - name: customer_id
+            description: "Customer key"
+          - name: order_date
+            description: "Order timestamp"
 
 models:
   - name: stg_customers

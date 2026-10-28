@@ -42,9 +42,12 @@ def test_constant_pre_metric_theta_zero() -> None:
     assert estimate_theta(y, x, group) == 0.0
 
 
-def test_missing_values_dropped() -> None:
+def test_missing_pre_values_are_imputed_not_mixed() -> None:
     y = pd.Series([1.0, 2.0, 3.0, 4.0])
     x = pd.Series([10.0, np.nan, 30.0, 40.0])
     group = pd.Series(["control", "control", "treatment", "treatment"])
     adjusted = apply_cuped(y, x, group)
-    assert adjusted.isna().sum() == 1  # rows with missing x remain NaN
+    # Missing pre-period values are filled with the control mean before the
+    # adjustment; adjusted and unadjusted rows are never mixed.
+    assert adjusted.isna().sum() == 0
+    assert len(adjusted) == 4

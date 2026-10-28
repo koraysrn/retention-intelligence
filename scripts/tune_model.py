@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import yaml
 from sklearn.metrics import average_precision_score
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.model_selection import StratifiedKFold
 from src.config import PROJECT_ROOT, settings
 from src.models.prepare import categorical_features, numeric_features, split_features_target
 from src.models.train import build_pipeline
@@ -61,9 +61,10 @@ def _evaluate(
     num_cols: list[str],
     cat_cols: list[str],
 ) -> float:
-    tscv = TimeSeriesSplit(n_splits=3)
+    # Customer-level snapshot data: stratified folds, not a temporal split.
+    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
     scores: list[float] = []
-    for train_idx, val_idx in tscv.split(x):
+    for train_idx, val_idx in skf.split(x, y):
         pipe = build_pipeline(model_type, params, num_cols, cat_cols)
         pipe.fit(x.iloc[train_idx], y.iloc[train_idx])
         proba = pipe.predict_proba(x.iloc[val_idx])[:, 1]
@@ -73,9 +74,6 @@ def _evaluate(
 
 def main() -> None:
     df = pd.read_parquet(settings.data_processed / "training_set.parquet")
-    if "last_order_date" in df.columns:
-        df = df.sort_values("last_order_date").reset_index(drop=True)
-
     x, y = split_features_target(df)
     num_cols = numeric_features(x)
     cat_cols = categorical_features(x)

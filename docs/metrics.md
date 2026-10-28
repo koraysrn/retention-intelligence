@@ -1,79 +1,75 @@
-# Model Metrics and Selection Rationale
+# Model Metrics and Evaluation Protocol
 
-This document explains **why** particular metrics are chosen when evaluating the
-success of the churn model. Churn is typically an imbalanced classification
-problem, so `accuracy` alone is **not used**.
+This document matches the code in [`src/models/evaluate.py`](../src/models/evaluate.py)
+and [`scripts/train_ensemble.py`](../scripts/train_ensemble.py). There is one
+protocol: a stratified holdout plus StratifiedKFold CV.
 
-## 1. Metric Table
+## 1. Metrics
 
-| Metric | What it measures | Role in this project | Priority |
-|---|---|---|---|
-| **PR-AUC** | Area under the precision-recall curve | The most informative ranking metric for imbalanced data | Highest |
-| **Recall** | How many real churns were captured | Missing churn = revenue loss | High |
-| **Precision** | How many flagged "churns" are correct | False positives = wasted discount cost | High |
-| **ROC-AUC** | Threshold-independent ranking quality | General comparison | Medium |
-| **F1-Score** | Harmonic balance of precision and recall | Single-number summary | Medium |
-| **Profit curve** | Expected profit per threshold | Threshold optimization | Business decision |
-| **Lift (top decile)** | Gain within the top 10% | Campaign targeting effectiveness | Supporting |
+| Metric | Role | Priority |
+|---|---|---|
+| **PR-AUC** | Ranking quality for the minority churn class | Highest |
+| **Recall / Precision** | Business cost trade-off at the operating threshold | High |
+| **ROC-AUC** | Secondary ranking comparison | Medium |
+| **Brier score / log loss** | Probability quality (calibration) | High |
+| **Reliability curve / ECE / calibration slope** | Are predicted probabilities trustworthy? | High |
+| **Profit curve** | Threshold choice from LTV, incentive cost and uplift | Business |
+| **Lift (top decile)** | Campaign targeting efficiency | Supporting |
+| **Bootstrap CI** | Uncertainty on PR-AUC / ROC-AUC | Required |
 
-## 2. Why These Metrics?
+Accuracy is not used: the churn class is not balanced and accuracy hides the
+cost of missed churners.
 
-### 2.1 Why is PR-AUC prioritized over ROC-AUC?
-
-ROC-AUC can be "optimistic" when the negative class dominates. When churn is a
-minority (5–20%), the difference between `TP` and `FP` is drowned out by the
-`TN` mass. PR-AUC focuses only on the positive class (churn) and therefore
-measures the **small but critical churn segment** more honestly.
-
-### 2.2 Precision vs Recall — business cost trade-off
+## 2. Profit curve
 
 ```text
-Precision ↑ : fewer unnecessary discounts (cost control)
-Recall    ↑ : fewer missed customers (revenue protection)
+TP(τ) = recall(τ) × n_positive
+FP(τ) = TP(τ) / precision(τ) − TP(τ)
+FN(τ) = n_positive − TP(τ)
+
+Profit(τ) = TP(τ) × uplift × LTV − FP(τ) × incentive_cost − FN(τ) × LTV
 ```
 
-- **High discount cost, narrow margin** → Precision takes priority.
-- **High LTV of a lost customer** → Recall takes priority.
+- `LTV`, `incentive_cost` and `uplift` come from `configs/config.yaml`
+  (`experiment.ltv`, `experiment.incentive_cost`, `experiment.uplift`), not
+  hardcoded constants.
+- `sklearn.precision_recall_curve` returns `n+1` precision/recall points and
+  `n` thresholds. We drop the final point (which has no threshold) and append an
+  explicit `threshold = 1.0` (“contact nobody”) row.
+- `find_optimal_threshold()` uses this corrected curve. A hand-checkable unit
+  test lives in [`tests/test_evaluate.py`](../tests/test_evaluate.py).
 
-This trade-off is optimized with the **profit curve** rather than a single fixed
-threshold.
+## 3. Calibration
 
-### 2.3 Expected Profit (Profit Curve)
+- Platt (sigmoid) calibration is fitted on **out-of-fold** ensemble scores
+  (cross-fitting); the holdout is untouched.
+- Reported in `metrics.json`: Brier score, log loss, ECE, reliability curve,
+  calibration slope/intercept.
+- The serving threshold is stored in `artifacts/model_ecommerce_ensemble/serving_config.json`
+  and read by batch scoring and the API.
+
+## 4. Evaluation protocol
 
 ```text
-ExpectedProfit(τ) = (TP(τ) × LTV) − (FP(τ) × DiscountCost) − (FN(τ) × LTV)
+|---------------- TRAIN (80%) ----------------|---- HOLDOUT (20%) ----|
+        |-- StratifiedKFold(5) OOF --|
 ```
 
-The optimum `τ* = argmax ExpectedProfit(τ)` is decided together with the
-business unit. Since the model output is a probability, the threshold is tuned
-with the business team.
+1. Stratified 80/20 holdout.
+2. StratifiedKFold CV on the training portion for OOF probabilities.
+3. Cross-fitted Platt calibration on OOF scores.
+4. Holdout: PR-AUC/ROC-AUC with bootstrap 95% CI, Brier/log loss, calibration,
+   profit curve and SHAP.
+5. Leakage ablation: PR-AUC with vs without `recency_days` and
+   `order_session_gap_days`; the without-recency value is the primary metric.
 
-## 3. Evaluation Protocol
+## 5. Risk tiers
 
-1. **Split:** Chronological train/validation/test (see
-   [`docs/churn_definition.md`](churn_definition.md)).
-2. **CV:** Walk-forward — PR-AUC, ROC-AUC, Recall@top-decile in every fold.
-3. **Final:** PR-AUC + calibration (Brier score) + SHAP on the holdout set.
-4. **Baseline comparison:** Net improvement is reported against Logistic
-   Regression and the naive "label everyone as churn" baseline.
+| Tier | Calibrated probability |
+|---|---|
+| `low` | `p < 0.40` |
+| `medium` | `0.40 <= p < 0.70` |
+| `high` | `p >= 0.70` |
 
-## 4. Calibration and Explainability
-
-- **Calibration:** When `churn_probability` should be interpreted as a real
-  probability, it is validated with the Brier score; isotonic/Platt calibration
-  is applied if needed.
-- **SHAP:** Explains why each customer is risky. This output feeds both
-  regulation (KVKK/GDPR transparency) and the personalization input of the
-  Agentic AI layer.
-
-## 5. Thresholds and Reporting
-
-```text
-risk_tier = high    if p ≥ 0.70         → Agentic AI intervention
-            medium if 0.40 ≤ p < 0.70   → standard campaign
-            low    if p < 0.40          → no action
-```
-
-Thresholds are managed from configuration according to the profit curve on the
-validation set, campaign budget and operational capacity (see
-[`configs/config.yaml`](../configs/config.yaml)).
+Boundaries are left-closed; `0.40` is **medium** and `0.70` is **high**. They
+are stored in `serving_config.json` and enforced by tests.

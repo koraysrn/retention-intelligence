@@ -1,8 +1,15 @@
 """RAG component: product catalog, campaign history and brand guideline retrieval.
 
-pgvector is targeted as the vector database; when it is not installed
-(prototype/test), a deterministic fallback with an in-memory keyword-overlap
-score (Jaccard) is used.
+======================================================================
+WARNING: EXPERIMENTAL PROTOTYPE ONLY. NOT PRODUCTION RAG.
+This module is a deterministic keyword-overlap retriever (Jaccard) over four
+in-memory documents. It does NOT use pgvector, embeddings, hybrid search,
+a reranker, citations or a retrieval evaluation set. It is excluded from the
+default `make pipeline`; see `experimental/README.md`.
+======================================================================
+
+pgvector is the design target; when it is not installed (prototype/test), the
+deterministic fallback below is used.
 """
 
 from __future__ import annotations

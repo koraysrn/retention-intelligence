@@ -7,7 +7,7 @@ name = "churn-reengagement-platform"
 version = "0.1.0"
 description = "Enterprise churn prediction, A/B experiment platform and Agentic AI/RAG re-engagement system"
 readme = "README.md"
-requires-python = ">=3.12,<4"
+requires-python = ">=3.15,<4"
 license = { text = "Proprietary" }
 authors = [{ name = "Re-Engagement Platform Team" }]
 dependencies = [
@@ -67,7 +67,8 @@ dev = [
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
     "ruff>=0.16.4",
-    "mypy>=2.3.1",
+    "mypy>=1.11,<1.15",
+    "types-PyYAML",
     "pre-commit>=4.6.2",
 ]
 
@@ -84,15 +85,19 @@ include = ["src*"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py314"
+target-version = "py315"
 src = ["src", "scripts", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's dependency-injection idiom uses Depends(...) in defaults.
+"src/serving/api.py" = ["B008"]
+
 [tool.mypy]
-python_version = "3.14"
+python_version = "3.15"
 warn_return_any = true
 warn_unused_ignores = true
 ignore_missing_imports = true
@@ -111,4 +116,5 @@ markers = [
 
 [tool.coverage.run]
 source = ["src"]
-omit = ["src/serving/api.py"]
+# api.py is included so auth/PII endpoints are measured in CI.
+omit = []

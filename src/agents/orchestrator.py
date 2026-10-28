@@ -23,7 +23,7 @@ from src.agents.escalation import (
     determine_priority,
     should_escalate,
 )
-from src.agents.guardrails import run_guardrails
+from src.agents.guardrails import llm_judge, run_guardrails
 from src.agents.llm import LLMClient, build_email_prompt, mask_pii
 from src.agents.rag import RAGRetriever, RetrievalResult
 from src.config import PROJECT_ROOT, load_yaml, settings
@@ -112,8 +112,16 @@ def _generation_node(state: AgentState) -> AgentState:
 def _guardrail_node(state: AgentState) -> AgentState:
     cfg = load_agents_config()
     max_discount = float(cfg.get("max_discount_pct", 30.0))
-    result = run_guardrails(state.get("draft_content", ""), max_discount)
-    return {"guardrail_passed": result.passed, "guardrail_reasons": result.reasons}
+    content = state.get("draft_content", "")
+    result = run_guardrails(content, max_discount)
+    checks = dict(result.checks)
+    reasons = list(result.reasons)
+    # Model-based grounding check is part of the workflow, not just tests.
+    grounded = llm_judge(content, state.get("context", ""))
+    checks["grounded"] = grounded
+    if not grounded:
+        reasons.append("grounded")
+    return {"guardrail_passed": all(checks.values()), "guardrail_reasons": reasons}
 
 
 def _should_send(state: AgentState) -> str:

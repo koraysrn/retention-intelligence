@@ -56,9 +56,16 @@ class Settings(BaseSettings):
     high_risk_threshold: float = 0.70
     medium_risk_threshold: float = 0.40
 
-    # Serving
+    # Serving / auth (prototype defaults; override in .env / secret manager)
     serving_host: str = "0.0.0.0"
-    serving_port: int = 8000
+    serving_port: int = 8010
+    api_key: str = "dev-admin-key"
+    api_read_key: str = "dev-read-key"
+
+    # Action safety limits
+    action_budget_limit: float = 10_000.0
+    action_max_recipients: int = 100
+    action_cost_per_coupon: float = 50.0
 
     # Monitoring
     psi_threshold: float = 0.2

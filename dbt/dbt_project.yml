@@ -29,3 +29,7 @@ models:
 vars:
   churn_horizon_days: 90
   high_risk_threshold: 0.70
+  # Fixture default; override on real data:
+  # dbt run --vars '{"as_of_date": "2026-01-01", "horizon_days": 90}'
+  as_of_date: "2025-10-02 11:00:00"
+  horizon_days: 90

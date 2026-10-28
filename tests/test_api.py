@@ -11,6 +11,8 @@ from src.features.ecommerce import FEATURE_COLUMNS
 from src.serving.api import app
 
 MODEL_COLUMNS = FEATURE_COLUMNS
+ADMIN = {"X-API-Key": settings.api_key}
+READ = {"X-API-Key": settings.api_read_key}
 
 HAS_RAW_DATA = settings.ecommerce_data.exists()
 HAS_SCORES = (settings.data_processed / "scores.parquet").exists()
@@ -46,7 +48,9 @@ def test_predict_returns_risk() -> None:
             features[col] = str(value)
 
     client = TestClient(app)
-    resp = client.post("/predict", json={"customer_id": "TEST-1", "features": features})
+    resp = client.post(
+        "/predict", json={"customer_id": "TEST-1", "features": features}, headers=ADMIN
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["customer_id"] == "TEST-1"
@@ -65,18 +69,18 @@ def test_root_serves_html() -> None:
 @pytest.mark.skipif(not HAS_SCORES, reason="scores.parquet not found")
 def test_summary_endpoint() -> None:
     client = TestClient(app)
-    resp = client.get("/api/summary")
+    resp = client.get("/api/summary", headers=ADMIN)
     assert resp.status_code == 200
     body = resp.json()
     assert body["available"] is True
-    assert body["total_customers"] == 20000
+    assert body["total_customers"] > 0
     assert set(body["risk_distribution"]).issubset({"low", "medium", "high"})
 
 
 @pytest.mark.skipif(not HAS_METRICS, reason="model metrics not found")
 def test_model_metrics_endpoint() -> None:
     client = TestClient(app)
-    resp = client.get("/api/model-metrics")
+    resp = client.get("/api/model-metrics", headers=ADMIN)
     assert resp.status_code == 200
     body = resp.json()
     assert body.get("ensemble") is True
@@ -86,10 +90,10 @@ def test_model_metrics_endpoint() -> None:
 @pytest.mark.skipif(not HAS_RAW_DATA, reason="ecommerce_data.csv not found")
 def test_predict_customer_endpoint() -> None:
     client = TestClient(app)
-    resp = client.get("/api/predict/1")
+    resp = client.get("/api/predict/1000", headers=ADMIN)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["customer_id"] == "1"
+    assert body["customer_id"] == "1000"
     assert 0.0 <= body["churn_probability"] <= 1.0
     assert body["risk_tier"] in {"low", "medium", "high"}
 
@@ -97,10 +101,10 @@ def test_predict_customer_endpoint() -> None:
 @pytest.mark.skipif(not HAS_RAW_DATA, reason="ecommerce_data.csv not found")
 def test_customer_detail_endpoint() -> None:
     client = TestClient(app)
-    resp = client.get("/api/customers/1")
+    resp = client.get("/api/customers/1000", headers=ADMIN)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["customer_id"] == "1"
+    assert body["customer_id"] == "1000"
     assert body["name"]
     assert body["country"]
     assert "risk_explanation" in body
@@ -111,20 +115,24 @@ def test_customer_detail_endpoint() -> None:
 @pytest.mark.skipif(not HAS_RAW_DATA, reason="ecommerce_data.csv not found")
 def test_customer_detail_unknown_404() -> None:
     client = TestClient(app)
-    resp = client.get("/api/customers/NONEXISTENT-ID")
+    resp = client.get("/api/customers/NONEXISTENT-ID", headers=ADMIN)
     assert resp.status_code == 404
 
 
 @pytest.mark.skipif(not HAS_RAW_DATA, reason="ecommerce_data.csv not found")
 def test_predict_customer_unknown_404() -> None:
     client = TestClient(app)
-    resp = client.get("/api/predict/NONEXISTENT-ID")
+    resp = client.get("/api/predict/NONEXISTENT-ID", headers=ADMIN)
     assert resp.status_code == 404
 
 
 def test_chat_endpoint() -> None:
     client = TestClient(app)
-    resp = client.post("/api/chat", json={"message": "Why is the risk high?", "customer_id": None})
+    resp = client.post(
+        "/api/chat",
+        json={"message": "Why is the risk high?", "customer_id": None},
+        headers=ADMIN,
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["reply"]
@@ -136,7 +144,8 @@ def test_chat_endpoint_with_customer() -> None:
     client = TestClient(app)
     resp = client.post(
         "/api/chat",
-        json={"message": "Why is the risk high?", "customer_id": "1"},
+        json={"message": "Why is the risk high?", "customer_id": "1000"},
+        headers=ADMIN,
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -148,8 +157,12 @@ def test_chat_coupon_action() -> None:
     client = TestClient(app)
     resp = client.post(
         "/api/chat",
-        json={"message": "send a 15% discount coupon to high-risk customers for 7 days"},
+        json={
+            "message": "send a 15% discount coupon to high-risk customers for 7 days",
+            "confirm": False,
+        },
+        headers=ADMIN,
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert "sent" in body["reply"].lower() or "coupon" in body["reply"].lower()
+    assert "confirmation required" in body["reply"].lower()

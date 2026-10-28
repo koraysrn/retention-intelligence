@@ -8,6 +8,8 @@ import pytest
 from src.experiments.analysis import (
     analyze_experiment,
     cuped_t_test,
+    lan_demets_alpha_spent,
+    multiple_metric_correction,
     obrien_fleming_boundary,
     proportions_z_test,
     simulate_outcomes,
@@ -108,3 +110,56 @@ def test_analyze_experiment_launch_when_net_positive() -> None:
 def test_analyze_experiment_missing_columns_raises() -> None:
     with pytest.raises(ValueError, match="Missing columns"):
         analyze_experiment(pd.DataFrame({"assignment": ["control", "treatment"]}))
+
+
+def test_z_test_ci_and_z_have_same_sign() -> None:
+    rng = np.random.default_rng(0)
+    control = pd.Series(rng.random(5000) < 0.50).astype(int)
+    treatment = pd.Series(rng.random(5000) < 0.40).astype(int)
+    result = proportions_z_test(control, treatment)
+    assert result.z_stat < 0
+    assert result.ci_high < 0
+    assert result.lift_ci_high < 0
+
+
+def test_cuped_rows_are_not_mixed_with_unadjusted() -> None:
+    assignment = pd.Series(["control", "treatment"] * 500)
+    data = simulate_outcomes(assignment, seed=7, baseline_churn=0.5, treatment_effect=0.2)
+    data.loc[data.index[:20], "pre_revenue"] = np.nan
+    report = analyze_experiment(data)
+    assert report["net_revenue_test"]["cuped_used"] is True
+    # Missing pre-period values are imputed, so every row is adjusted once.
+    assert report["net_revenue_test"]["cuped_n"] == len(data)
+
+
+def test_sequential_boundary_is_reported() -> None:
+    assignment = pd.Series(["control", "treatment"] * 5000)
+    data = simulate_outcomes(assignment, seed=7, baseline_churn=0.5, treatment_effect=0.2)
+    report = analyze_experiment(data, information_fraction=0.5)
+    assert report["sequential"]["obrien_fleming_z"] > 1.96
+    assert 0 < report["sequential"]["alpha_spent"] < 0.05
+
+
+def test_decision_requires_practical_significance() -> None:
+    rng = np.random.default_rng(3)
+    n = 5000
+    control_churn = (rng.random(n) < 0.5).astype(int)
+    treatment_churn = (rng.random(n) < 0.3).astype(int)
+    churn = pd.Series(np.concatenate([control_churn, treatment_churn]))
+    assignment = pd.Series(["control"] * n + ["treatment"] * n)
+    revenue = pd.Series(np.where(churn == 0, 300.0, 0.0))
+    data = pd.DataFrame({"assignment": assignment, "churn": churn, "revenue": revenue})
+    report = analyze_experiment(data, mde_absolute=0.25)
+    assert report["decision_inputs"]["practical_significance"] is False
+    assert report["decision"] == "HOLD"
+
+
+def test_lan_demets_alpha_increases_with_information() -> None:
+    assert lan_demets_alpha_spent(0.25) < lan_demets_alpha_spent(1.0)
+    assert math.isclose(lan_demets_alpha_spent(1.0), 0.05, abs_tol=1e-9)
+
+
+def test_multiple_metric_correction() -> None:
+    adjusted = multiple_metric_correction({"a": 0.01, "b": 0.04})
+    assert adjusted["a"] == pytest.approx(0.02)
+    assert adjusted["b"] == pytest.approx(0.08)

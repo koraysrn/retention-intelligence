@@ -16,11 +16,29 @@ from sklearn.preprocessing import OrdinalEncoder, StandardScaler
 # Identifier/PII columns are removed from the model input
 IDENTIFIER_COLUMNS = {"customer_id", "name", "email"}
 
-# Label columns (including derivatives)
-LABEL_COLUMNS = {"churn", "recency_churn", "is_repeat_customer"}
+# Label / audit columns are removed from the model input
+LABEL_COLUMNS = {
+    "churn",
+    "recency_churn",
+    "is_repeat_customer",
+    "churn_legacy_repeat",
+    "ordered_in_outcome_window",
+    "pre_asof_segment",
+}
 
-# Columns that determine the label deterministically (leaky)
-LEAKY_COLUMNS = {"total_orders"}
+# Post-hoc aggregates and legacy label determinants (leaky)
+LEAKY_COLUMNS = {
+    "total_orders",
+    "total_spend_usd",
+    "avg_order_value",
+    "avg_discount_pct",
+    "order_span_days",
+    "clv_tier",
+    "preferred_payment",
+    "preferred_device_ord",
+    "preferred_source",
+    "top_category_bought",
+}
 
 
 def split_features_target(
@@ -45,7 +63,15 @@ def split_features_target(
     y = df[target_col].reset_index(drop=True)
 
     drop = [c for c in IDENTIFIER_COLUMNS | LABEL_COLUMNS | LEAKY_COLUMNS if c in df.columns]
-    x = df.drop(columns=drop).reset_index(drop=True)
+    # Merge suffixes can recreate a label-derived audit column (e.g.
+    # ``ordered_in_outcome_window_x``); drop any such column defensively.
+    drop += [
+        c
+        for c in df.columns
+        if any(c.startswith(f"{label}_") for label in LABEL_COLUMNS)
+        or c.startswith("ordered_in_outcome_window")
+    ]
+    x = df.drop(columns=sorted(set(drop))).reset_index(drop=True)
 
     to_drop: list[str] = []
     for col in x.columns:

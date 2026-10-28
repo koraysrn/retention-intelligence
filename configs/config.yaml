@@ -18,10 +18,16 @@ experiment:
   baseline_churn_rate: null   # Computed from the data in Phase 0
   ltv: 500                    # Lifetime value per lost customer
   incentive_cost: 50          # Discount cost per customer for the campaign
+  uplift: 0.30                # Incremental save rate among true positives
 
 serving:
   host: "0.0.0.0"
-  port: 8000
+  port: 8010
+  api_key_env: "API_KEY"
+  api_read_key_env: "API_READ_KEY"
+  action_budget_limit: 10000
+  action_max_recipients: 100
+  action_cost_per_coupon: 50
 
 monitoring:
   psi_threshold: 0.2

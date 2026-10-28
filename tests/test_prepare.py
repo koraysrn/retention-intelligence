@@ -18,7 +18,8 @@ def _training_frame() -> pd.DataFrame:
         {
             "customer_id": ["C1", "C2", "C3"],
             "total_orders": [2, 1, 1],  # leaky -> must always be dropped
-            "total_spend_usd": [10.0, 20.0, 30.0],
+            "total_spend_usd": [10.0, 20.0, 30.0],  # leaky -> dropped
+            "recency_days": [5.0, 30.0, 120.0],
             "total_sessions": [5, 30, 120],
             "country": ["Canada", "USA", "UK"],
             "signup_date": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
@@ -44,7 +45,7 @@ def test_split_raises_on_missing_target() -> None:
 
 def test_feature_type_lists() -> None:
     x, _ = split_features_target(_training_frame())
-    assert set(numeric_features(x)) == {"total_spend_usd", "total_sessions"}
+    assert set(numeric_features(x)) == {"recency_days", "total_sessions"}
     assert set(categorical_features(x)) == {"country"}
 
 
@@ -53,7 +54,7 @@ def test_preprocessor_imputes_and_encodes() -> None:
     pre = build_preprocessor(numeric_features(x), categorical_features(x))
 
     x_missing = x.copy()
-    x_missing.loc[0, "total_spend_usd"] = np.nan
+    x_missing.loc[0, "recency_days"] = np.nan
     x_missing.loc[1, "country"] = np.nan
 
     out = pre.fit_transform(x_missing)
@@ -68,7 +69,7 @@ def test_preprocessor_handles_unknown_category() -> None:
 
     unknown = pd.DataFrame(
         {
-            "total_spend_usd": [5.0],
+            "recency_days": [5.0],
             "total_sessions": [10],
             "country": ["Mars"],
         }

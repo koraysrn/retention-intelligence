@@ -1,21 +1,23 @@
--- Churn label (mart layer) — ecommerce_data.csv (customer level)
--- Definition: docs/churn_definition.md
---
--- churn = 1: one-time shopper / non-repeat buyer (is_repeat_customer = 0)
--- churn = 0: repeat buyer (is_repeat_customer = 1)
---
--- Note: produces the same definition as src/features/ecommerce.py on the
--- Python side; this model is the auditable SQL counterpart of the label.
+-- Outcome-window churn label (mart layer).
+-- churn = 1 iff there is no order in (as_of, as_of + horizon_days].
+{% set as_of = var('as_of_date', '2025-10-02 11:00:00') %}
+{% set horizon_days = var('horizon_days', 90) %}
 
 with customers as (
-    select * from {{ ref('stg_customers') }}
+    select customer_id, is_repeat_customer from {{ ref('stg_customers') }}
 ),
 
-labels as (
-    select
-        customer_id,
-        case when is_repeat_customer = 0 then 1 else 0 end as churn
-    from customers
+outcome as (
+    select distinct customer_id
+    from {{ source('raw', 'orders') }}
+    where cast(order_date as date) > cast('{{ as_of }}' as date)
+      and cast(order_date as date) <= cast('{{ as_of }}' as date) + interval '{{ horizon_days }} days'
 )
 
-select * from labels
+select
+    c.customer_id,
+    case when o.customer_id is null then 1 else 0 end as churn,
+    case when o.customer_id is null then 0 else 1 end as ordered_in_outcome_window,
+    1 - c.is_repeat_customer as churn_legacy_repeat
+from customers c
+left join outcome o using (customer_id)

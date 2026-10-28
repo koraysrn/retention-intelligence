@@ -17,6 +17,8 @@ def _scores() -> pd.DataFrame:
             "customer_id": ["C1", "C2", "C3", "C4"],
             "churn_probability": [0.9, 0.8, 0.5, 0.2],
             "risk_tier": ["high", "high", "medium", "low"],
+            "marketing_opt_in": [True, True, True, False],
+            "model_version": ["test-v1", "test-v1", "test-v1", "test-v1"],
         }
     )
 
@@ -29,12 +31,76 @@ def test_send_coupon_creates_and_sends() -> None:
         channel="email",
         notifier=notifier,
         scores=_scores(),
+        confirm=True,
+        idempotency_key="test-send-1",
     )
-    assert result["sent"] == 2  # 2 high-risk customers
+    assert result["sent"] == 2  # 2 high-risk, consenting customers
     assert result["discount_pct"] == 15.0
     assert len(result["coupon_codes"]) == 2
     assert len(notifier.sent) == 2
     assert "COUPON-" in notifier.sent[0].content
+
+
+def test_send_coupon_requires_confirmation() -> None:
+    result = send_coupon_to_risk_segment(
+        discount_pct=15, validity_days=7, scores=_scores(), confirm=False
+    )
+    assert result["sent"] == 0
+    assert result["requires_confirmation"] is True
+
+
+def test_send_coupon_is_idempotent() -> None:
+    notifier = ChannelNotifier(enabled_channels=["email"])
+    first = send_coupon_to_risk_segment(
+        discount_pct=15,
+        validity_days=7,
+        notifier=notifier,
+        scores=_scores(),
+        confirm=True,
+        idempotency_key="same-key",
+    )
+    second = send_coupon_to_risk_segment(
+        discount_pct=15,
+        validity_days=7,
+        notifier=notifier,
+        scores=_scores(),
+        confirm=True,
+        idempotency_key="same-key",
+    )
+    assert first["sent"] == 2
+    assert second["sent"] == 0
+    assert second["duplicate"] is True
+    assert len(notifier.sent) == 2
+
+
+def test_send_coupon_respects_consent() -> None:
+    scores = _scores()
+    scores.loc[scores["customer_id"] == "C2", "marketing_opt_in"] = False
+    notifier = ChannelNotifier(enabled_channels=["email"])
+    result = send_coupon_to_risk_segment(
+        discount_pct=15,
+        validity_days=7,
+        notifier=notifier,
+        scores=scores,
+        confirm=True,
+        idempotency_key="consent-test",
+    )
+    assert result["sent"] == 1
+
+
+def test_send_coupon_respects_budget() -> None:
+    notifier = ChannelNotifier(enabled_channels=["email"])
+    result = send_coupon_to_risk_segment(
+        discount_pct=15,
+        validity_days=7,
+        notifier=notifier,
+        scores=_scores(),
+        confirm=True,
+        idempotency_key="budget-test",
+        budget_limit=50,
+        cost_per_coupon=50,
+    )
+    assert result["sent"] == 1
 
 
 def test_send_coupon_invalid_discount_raises() -> None:

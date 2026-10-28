@@ -49,6 +49,18 @@ ECOMMERCE_COLUMNS: dict[str, str] = {
 }
 
 
+def load_orders(path: Path | str) -> pd.DataFrame:
+    """Load a transaction-level order history (Parquet or CSV)."""
+    path = Path(path)
+    df = pd.read_parquet(path) if path.suffix.lower() == ".parquet" else pd.read_csv(path)
+    if "order_date" in df.columns:
+        df["order_date"] = pd.to_datetime(df["order_date"], errors="coerce")
+    if "customer_id" in df.columns:
+        df["customer_id"] = df["customer_id"].astype(str)
+    logger.info("Loaded order history: %d rows", len(df))
+    return df
+
+
 def load_ecommerce_data(csv_path: Path | str) -> pd.DataFrame:
     """Load ``ecommerce_data.csv`` with pandas and normalize the column types.
 
@@ -66,6 +78,38 @@ def load_ecommerce_data(csv_path: Path | str) -> pd.DataFrame:
         df["customer_id"] = df["customer_id"].astype(str)
     logger.info("Loaded e-commerce data: %d rows, %d columns", len(df), df.shape[1])
     return df
+
+
+def ingest_orders_to_duckdb(
+    csv_path: Path | str,
+    db_path: Path | str,
+    table: str = "orders",
+) -> None:
+    """Load a transaction-level order history into DuckDB."""
+    import duckdb
+
+    path = Path(csv_path)
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    con = duckdb.connect(str(db_path))
+    csv_literal = path.resolve().as_posix()
+    con.execute(
+        f"""
+        CREATE OR REPLACE TABLE {table} AS
+        SELECT
+            order_id,
+            CAST(customer_id AS BIGINT) AS customer_id,
+            CAST(order_date AS TIMESTAMP) AS order_date,
+            CAST(amount_usd AS DOUBLE) AS amount_usd,
+            CAST(discount_pct AS DOUBLE) AS discount_pct,
+            channel,
+            device,
+            category
+        FROM read_csv('{csv_literal}', header = true)
+        """
+    )
+    row = con.execute(f"SELECT count(*) FROM {table}").fetchone()
+    con.close()
+    logger.info("Written to DuckDB: %s -> %s (%s rows)", table, db_path, row[0] if row else 0)
 
 
 def ingest_ecommerce_to_duckdb(
