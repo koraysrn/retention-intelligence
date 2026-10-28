@@ -44,7 +44,18 @@ jobs:
       - name: Install
         # The agent/RAG tests use the deterministic fallback; installing the
         # optional LangGraph/LangChain extras is unnecessary in CI.
-        run: uv pip install --system -e ".[ml,experiment,serving,dev]"
+        run: uv pip install --system -e ".[ml,experiment,serving,dbt,dev]"
+      - name: Fix dbt on Python 3.15
+        run: uv pip install --system --no-deps "mashumaro>=3.18"
+      - name: Prepare fixture artifacts
+        run: |
+          cp dbt/profiles.example.yml dbt/profiles.yml
+          python -m scripts.download_data
+          python -m scripts.ingest
+          dbt build --project-dir dbt --profiles-dir dbt
+          python -m scripts.build_features
+          python -m scripts.train_ensemble
+          python -m src.serving.batch_score
       - name: Pytest
         run: pytest --cov=src --cov-report=xml
       - name: Upload coverage

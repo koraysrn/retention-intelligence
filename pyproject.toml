@@ -67,8 +67,10 @@ agents = [
     "pgvector>=0.5.0",
 ]
 dbt = [
-    "dbt-core>=1.12.2",
-    "dbt-duckdb>=1.11.0",
+    # Python 3.15-compatible pins; scripts/bootstrap.sh upgrades mashumaro
+    # separately because dbt-core 1.11 pins an older version that crashes.
+    "dbt-core==1.11.7",
+    "dbt-duckdb==1.10.0",
 ]
 dev = [
     "pytest>=9.1.1",
