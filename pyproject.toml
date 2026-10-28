@@ -7,7 +7,10 @@ name = "churn-reengagement-platform"
 version = "0.1.0"
 description = "Enterprise churn prediction, A/B experiment platform and Agentic AI/RAG re-engagement system"
 readme = "README.md"
-requires-python = ">=3.15,<4"
+# The reference/CI environment is Python 3.15 (see environment.yml), but the
+# package metadata intentionally allows 3.12+ so Dependabot (which currently
+# supports up to Python 3.14) and downstream tooling can resolve dependencies.
+requires-python = ">=3.12,<4"
 license = { text = "Proprietary" }
 authors = [{ name = "Re-Engagement Platform Team" }]
 dependencies = [

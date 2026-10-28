@@ -113,7 +113,7 @@ The dbt mart and the Python feature builder implement the same as-of contract; a
 
 | Layer | Tools |
 |---|---|
-| Language | Python 3.15 |
+| Language | Python 3.15 reference environment; package metadata supports 3.12+ for tooling compatibility |
 | Data | pandas, NumPy, PyArrow, DuckDB |
 | Transformation | dbt-core + dbt-duckdb |
 | ML | scikit-learn, LightGBM, XGBoost, SHAP |
