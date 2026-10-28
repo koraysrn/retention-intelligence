@@ -41,6 +41,7 @@ dependencies:
       - xgboost
       - shap
       - imbalanced-learn
+      - httpx2
       - types-PyYAML
       - types-requests
       # dbt/MLflow are installed by scripts/bootstrap.sh because dbt-core's

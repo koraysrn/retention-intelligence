@@ -42,7 +42,7 @@ echo "Installing the project (editable, no dependency resolution)..."
 "$PY" -m pip install --only-binary=:all: "mypy>=1.11,<1.15" types-PyYAML types-requests || true
 
 echo "Installing runtime packages that lack Python 3.15 conda builds..."
-for pkg in lightgbm xgboost shap imbalanced-learn; do
+for pkg in lightgbm xgboost shap imbalanced-learn httpx2; do
   "$PY" -m pip install --only-binary=:all: "$pkg" || \
     echo "WARNING: optional package $pkg could not be installed; code falls back where possible."
 done
