@@ -42,5 +42,6 @@ dependencies:
       - shap
       - imbalanced-learn
       - types-PyYAML
+      - types-requests
       # dbt/MLflow are installed by scripts/bootstrap.sh because dbt-core's
       # mashumaro pin must be upgraded separately on Python 3.15.

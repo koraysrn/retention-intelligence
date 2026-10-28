@@ -72,6 +72,7 @@ dev = [
     "ruff>=0.16.4",
     "mypy>=1.11,<1.15",
     "types-PyYAML",
+    "types-requests",
     "pre-commit>=4.6.2",
 ]
 

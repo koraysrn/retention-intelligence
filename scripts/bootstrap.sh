@@ -39,7 +39,7 @@ echo "Installing the project (editable, no dependency resolution)..."
 
 # mypy 2.x currently imports a pathspec module missing from the version dbt
 # needs; pin the 1.x line for the prototype.
-"$PY" -m pip install --only-binary=:all: "mypy>=1.11,<1.15" types-PyYAML || true
+"$PY" -m pip install --only-binary=:all: "mypy>=1.11,<1.15" types-PyYAML types-requests || true
 
 echo "Installing runtime packages that lack Python 3.15 conda builds..."
 for pkg in lightgbm xgboost shap imbalanced-learn; do
