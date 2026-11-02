@@ -64,7 +64,7 @@ agents = [
     "langchain-anthropic>=1.6.1",
     "langchain-community>=0.4.2",
     "psycopg[binary]>=3.3.4",
-    "pgvector>=0.5.0",
+    "pgvector>=0.5.1",
 ]
 dbt = [
     # Python 3.15-compatible pins; scripts/bootstrap.sh upgrades mashumaro
