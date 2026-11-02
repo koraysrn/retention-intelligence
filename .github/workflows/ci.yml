@@ -19,7 +19,7 @@ jobs:
       - uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.15"
-      - uses: astral-sh/setup-uv@v10.3.2
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Install
         run: uv pip install --system -e ".[dev]"
       - name: Ruff lint
@@ -40,7 +40,7 @@ jobs:
       - uses: actions/setup-python@v7.1.0
         with:
           python-version: ${{ matrix.python-version }}
-      - uses: astral-sh/setup-uv@v10.3.2
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Install
         # The agent/RAG tests use the deterministic fallback; installing the
         # optional LangGraph/LangChain extras is unnecessary in CI.
