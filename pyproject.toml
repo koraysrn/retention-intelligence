@@ -44,7 +44,7 @@ ml = [
 ml-catboost = ["catboost>=1.2.10"]
 experiment = [
     "scipy>=1.18.0",
-    "statsmodels>=0.14.6",
+    "statsmodels>=0.15.0",
 ]
 serving = [
     "fastapi>=0.141.1",
